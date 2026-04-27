@@ -3,9 +3,13 @@
 #include <Wire.h>
 #include <hd44780.h>
 #include <hd44780ioClass/hd44780_I2Cexp.h>
+#include <ESP32Servo.h>
 
 BluetoothSerial SerialBT;
 hd44780_I2Cexp lcd;
+Servo servoBrazoIzq;
+Servo servoBrazoDer;
+Servo servoCabeza;
 
 // ─── Enumeraciones ──────────────────────────────────────────
 
@@ -72,7 +76,21 @@ constexpr int pinIN2 = 17;
 constexpr int pinIN3 = 18;
 constexpr int pinIN4 = 19;
 
+// Servos — ajustar segun cableado real
+constexpr int servoBrazoIzqPin = 13;
+constexpr int servoBrazoDerPin = 23;
+constexpr int servoCabezaPin   = 32;
+
 // ─── Constantes ─────────────────────────────────────────────
+
+// Angulos de servos — ajustar segun montaje fisico
+constexpr int brazoIzqReposo  =   0;
+constexpr int brazoIzqActivo  =  90;
+constexpr int brazoDerReposo  = 180;
+constexpr int brazoDerActivo  =  90;
+constexpr int cabezaIzqGrados =  45;
+constexpr int cabezaCenGrados =  90;
+constexpr int cabezaDerGrados = 135;
 
 constexpr unsigned long scrollIntervalMs = 220;
 constexpr unsigned long commandIdleTimeoutMs = 120;
@@ -111,6 +129,8 @@ DisplayMode currentMode = DisplayMode::Standby;
 TelemetryFocus currentTelemetryFocus = TelemetryFocus::None;
 MoveState moveState;
 
+bool brazosActivos = false;
+
 unsigned long lastByteReceivedAt = 0;
 unsigned long lastScrollAt = 0;
 unsigned long lastGreetingSentAt = 0;
@@ -127,6 +147,10 @@ void girarIzquierda();
 void girarDerecha();
 void detenerMotores();
 void cancelSpecialMove();
+void moverBrazos();
+void cabezaIzquierda();
+void cabezaCentro();
+void cabezaDerecha();
 
 // ═══════════════════════════════════════════════════════════
 // LCD helpers (sin cambios respecto al original)
@@ -423,6 +447,20 @@ void apagarOjos() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// Funciones de servomotores
+// ═══════════════════════════════════════════════════════════
+
+void moverBrazos() {
+  brazosActivos = !brazosActivos;
+  servoBrazoIzq.write(brazosActivos ? brazoIzqActivo : brazoIzqReposo);
+  servoBrazoDer.write(brazosActivos ? brazoDerActivo : brazoDerReposo);
+}
+
+void cabezaIzquierda() { servoCabeza.write(cabezaIzqGrados); }
+void cabezaCentro()    { servoCabeza.write(cabezaCenGrados); }
+void cabezaDerecha()   { servoCabeza.write(cabezaDerGrados); }
+
+// ═══════════════════════════════════════════════════════════
 // Secuencias de movimientos especiales (tablas de pasos)
 // ═══════════════════════════════════════════════════════════
 
@@ -713,6 +751,12 @@ void handleCommand(String rawCommand) {
     return;
   }
 
+  // ── Servos ────────────────────────────────────────────────
+  if (upperCommand == "BRAZOS")     { moverBrazos();     return; }
+  if (upperCommand == "CABEZA_IZQ") { cabezaIzquierda(); return; }
+  if (upperCommand == "CABEZA_CEN") { cabezaCentro();    return; }
+  if (upperCommand == "CABEZA_DER") { cabezaDerecha();   return; }
+
   // ── Mensajes / Saludos ────────────────────────────────────
   if (upperCommand.startsWith("SALUDO:"))   { setGreetingMessage(rawCommand.substring(7));  return; }
   if (upperCommand.startsWith("GREETING:")) { setGreetingMessage(rawCommand.substring(9));  return; }
@@ -816,6 +860,13 @@ void setup() {
   pinMode(pinIN4, OUTPUT);
   detenerMotores();
 
+  servoBrazoIzq.attach(servoBrazoIzqPin);
+  servoBrazoDer.attach(servoBrazoDerPin);
+  servoCabeza.attach(servoCabezaPin);
+  servoBrazoIzq.write(brazoIzqReposo);
+  servoBrazoDer.write(brazoDerReposo);
+  servoCabeza.write(cabezaCenGrados);
+
   Serial.begin(115200);
   SerialBT.begin(bluetoothName);
 
@@ -826,7 +877,7 @@ void setup() {
   lcdReady = initLcd();
   setMode(DisplayMode::Standby);
 
-  Serial.println("Bluetooth listo. Comandos: F B L R S G H X D V P | STANDBY DRIVING MODE1 MODE2 | ON OFF | TEXT: SET_HORA: SET_TIEMPO: SET_NOMBRE:");
+  Serial.println("Bluetooth listo. Comandos: F B L R S G H X D V P | STANDBY DRIVING MODE1 MODE2 | ON OFF | TEXT: SET_HORA: SET_TIEMPO: SET_NOMBRE: | BRAZOS CABEZA_IZQ CABEZA_CEN CABEZA_DER");
 }
 
 void loop() {
