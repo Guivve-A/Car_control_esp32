@@ -1,72 +1,32 @@
 # Car_control_esp32
 
-Control inteligente de un carro con ESP32 + Bluetooth + LCD I2C + movimientos especiales.
+Control de un carro robot Wall-E con ESP32, Bluetooth Classic, tracción diferencial de 2 ruedas y 3 servomotores.
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-ESP32-orange)](https://platformio.org/)
 [![Framework](https://img.shields.io/badge/Framework-Arduino-00979D)](https://www.arduino.cc/)
-[![Bluetooth](https://img.shields.io/badge/Bluetooth-Classic-1f6feb)](#-protocolo-bluetooth)
-[![Board](https://img.shields.io/badge/Board-NodeMCU--32S-2ea44f)](#-hardware-y-pines)
+[![Bluetooth](https://img.shields.io/badge/Bluetooth-Classic-1f6feb)](#protocolo-bluetooth)
+[![Board](https://img.shields.io/badge/Board-NodeMCU--32S-2ea44f)](#hardware-y-pines)
 
 ---
 
 ## Que hace este proyecto
 
-Este firmware convierte un ESP32 en el cerebro de un mini robot con:
+Firmware para un robot móvil de tracción diferencial controlado por Bluetooth desde una app Android:
 
-- Control de movimiento en tiempo real por Bluetooth (`F`, `B`, `L`, `R`, `S`)
-- 4 modos de interfaz en LCD 20x4 (`STANDBY`, `DRIVING`, `MODE1`, `MODE2`)
-- Telemetria seleccionable por botones fisicos (hora, clima, nombre)
-- 4 movimientos especiales no bloqueantes (`X`, `D`, `V`, `P`)
-- Sistema de saludo con reenvio TTS (`TTS:<texto>`) para app Android
-
----
-
-## Navegacion rapida
-
-- [Demo en 3 minutos](#-demo-en-3-minutos)
-- [Arquitectura visual](#-arquitectura-visual)
-- [Hardware y pines](#-hardware-y-pines)
-- [Protocolo Bluetooth](#-protocolo-bluetooth)
-- [Modos LCD](#-modos-lcd)
-- [Compilar y cargar](#-compilar-y-cargar-con-platformio)
-- [Troubleshooting](#-troubleshooting)
+- Control de movimiento en tiempo real (`F`, `B`, `L`, `R`, `S`)
+- 4 movimientos especiales no bloqueantes: Explorar, Bailar, Vigilar, Susto
+- Control de 3 servomotores: brazo izquierdo, brazo derecho y cabeza
+- Control de LED (ojos del robot)
+- Maquina de estados no bloqueante para secuencias de movimiento
 
 ---
 
-## Demo en 3 minutos
-
-1. Conecta el ESP32 por USB.
-2. Compila y carga firmware:
+## Compilar y cargar
 
 ```bash
 pio run
 pio run -t upload
-```
-
-3. Abre monitor serie:
-
-```bash
 pio device monitor -b 115200
-```
-
-4. Conectate por Bluetooth al dispositivo:
-
-```text
-Car-ESP32
-```
-
-5. Envia comandos rapidos desde tu app o terminal BT:
-
-```text
-DRIVING
-F
-L
-S
-X
-MODE2
-SET_HORA:10:45
-SET_TIEMPO:Soleado 24C
-SET_NOMBRE:Wall-E
 ```
 
 ---
@@ -75,193 +35,195 @@ SET_NOMBRE:Wall-E
 
 ```mermaid
 flowchart LR
-    A[App Android / Terminal BT] -->|Comandos Bluetooth| B[ESP32 Firmware]
+    A[App Android] -->|Bluetooth Classic SPP| B[ESP32]
     B --> C[Parser de comandos]
-    C --> D[Control L298N\nMotores]
-    C --> E[Gestor LCD 20x4]
-    C --> F[Maquina de movimientos\n especiales]
-    C --> G[Telemetry Store\nHora/Clima/Nombre]
-    G --> E
-    F --> D
-    H[Botones fisicos\nGPIO25/26/27] --> G
+    C --> D[L298N\nMotores x2]
+    C --> E[Servo Brazo Izq\nGPIO25]
+    C --> F[Servo Brazo Der\nGPIO26]
+    C --> G[Servo Cabeza\nGPIO27]
+    C --> H[LED Ojos\nGPIO21]
+    C --> I[Maquina de\nMovimientos Especiales]
+    I --> D
 ```
-
-<details>
-<summary><strong>Como fluye internamente un comando</strong></summary>
-
-1. Llega byte por Bluetooth (`SerialBT`).
-2. Se arma `inputBuffer` hasta `\n` o timeout (120 ms).
-3. `handleCommand(...)` clasifica tipo de comando.
-4. Se ejecuta accion (motor, modo, telemetria, LED o movimiento especial).
-5. Opcionalmente responde por Bluetooth (`OK:*`, `MOVE:*`, `TTS:*`).
-
-</details>
 
 ---
 
-## Hardware y pines
+## Conexiones de hardware
 
-| Componente | Pin ESP32 | Detalle |
-|---|---:|---|
-| LED ojos | GPIO5 | ON/OFF visual |
-| LCD I2C SDA | GPIO21 | Bus I2C |
-| LCD I2C SCL | GPIO22 | Bus I2C |
-| Boton Hora | GPIO25 | Telemetria hora |
-| Boton Clima | GPIO26 | Telemetria clima |
-| Boton Nombre | GPIO27 | Telemetria nombre |
-| L298N IN1 | GPIO16 | Motor A |
-| L298N IN2 | GPIO17 | Motor A |
-| L298N IN3 | GPIO18 | Motor B |
-| L298N IN4 | GPIO19 | Motor B |
+### Alimentacion recomendada
 
-Board configurada en PlatformIO:
+```
+Fuente 7.4V (LiPo 2S) o 6xAA (9V)
+    │
+    ├─→ L298N  VS    (alimenta motores)
+    │   L298N  GND ──→ GND comun
+    │   L298N  5V  ──→ VCC servos (si el modulo tiene regulador onboard)
+    │
+    └─→ ESP32  VIN  (o 5V via USB durante desarrollo)
+```
 
-```ini
-[env:nodemcu-32s]
-platform = espressif32
-board = nodemcu-32s
-framework = arduino
-lib_deps =
-  duinowitchery/hd44780@^1.3.2
+> Los servos 9g requieren 5V. No los conectes al pin 3.3V del ESP32 — no entrega corriente suficiente.
+
+---
+
+### ESP32 → L298N (control de motores)
+
+| ESP32 GPIO | L298N pin | Funcion |
+|:---:|:---:|---|
+| GPIO 16 | IN1 | Motor izquierdo — sentido A |
+| GPIO 17 | IN2 | Motor izquierdo — sentido B |
+| GPIO 18 | IN3 | Motor derecho — sentido A |
+| GPIO 19 | IN4 | Motor derecho — sentido B |
+| GND | GND | Tierra comun |
+
+---
+
+### L298N → Motores (traccion diferencial)
+
+```
+L298N                        Motores DC
+─────────────────────────────────────────────
+OUT1 ───────────────────→  Terminal A ┐
+OUT2 ───────────────────→  Terminal B ┘  Motor IZQUIERDO
+
+OUT3 ───────────────────→  Terminal A ┐
+OUT4 ───────────────────→  Terminal B ┘  Motor DERECHO
+```
+
+Logica de movimiento:
+
+| Comando | IN1 | IN2 | IN3 | IN4 | Motor Izq | Motor Der |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| `F` | H | L | H | L | Adelante | Adelante |
+| `B` | L | H | L | H | Atras | Atras |
+| `L` | H | L | L | H | Adelante | Atras |
+| `R` | L | H | H | L | Atras | Adelante |
+| `S` | L | L | L | L | Stop | Stop |
+
+---
+
+### ESP32 → Servomotores
+
+| ESP32 GPIO | Servo | Posiciones |
+|:---:|---|---|
+| GPIO 25 | Brazo izquierdo | Reposo: 0° / Activo: 90° |
+| GPIO 26 | Brazo derecho | Reposo: 180° / Activo: 90° |
+| GPIO 27 | Cabeza | Izquierda: 45° / Centro: 90° / Derecha: 135° |
+
+Cada servo necesita 3 cables:
+
+```
+Servo (señal)  ──→  GPIO correspondiente
+Servo (VCC)    ──→  5V externo
+Servo (GND)    ──→  GND comun
+```
+
+> Los angulos de reposo/activo se ajustan con las constantes al inicio de main.cpp.
+
+---
+
+### ESP32 → LED (ojos del robot)
+
+| ESP32 GPIO | Componente |
+|:---:|---|
+| GPIO 21 | LED + resistencia (330Ω recomendado) → GND |
+
+---
+
+### Diagrama de pines completo (NodeMCU-32S)
+
+```
+                    ┌─────────────┐
+              3.3V ─┤             ├─ GND
+               EN  ─┤             ├─ GPIO23
+             GPIO36 ─┤             ├─ GPIO22
+             GPIO39 ─┤   NodeMCU   ├─ GPIO21  ──→ LED (ojos)
+             GPIO34 ─┤    32S      ├─ GPIO19  ──→ L298N IN4
+             GPIO35 ─┤             ├─ GPIO18  ──→ L298N IN3
+             GPIO32 ─┤             ├─ GPIO5
+             GPIO33 ─┤             ├─ GPIO17  ──→ L298N IN2
+             GPIO25 ─┤             ├─ GPIO16  ──→ L298N IN1
+             GPIO26 ─┤             ├─ GPIO4
+             GPIO27 ─┤             ├─ GPIO0
+             GPIO14 ─┤             ├─ GPIO2
+             GPIO12 ─┤             ├─ GPIO15
+             GPIO13 ─┤             ├─ GPIO8
+              GND  ─┤             ├─ GPIO7
+              VIN  ─┤             ├─ GPIO6
+                    └─────────────┘
+
+GPIO 25 ──→ Servo brazo izquierdo (señal)
+GPIO 26 ──→ Servo brazo derecho   (señal)
+GPIO 27 ──→ Servo cabeza          (señal)
 ```
 
 ---
 
 ## Protocolo Bluetooth
 
-Dispositivo Bluetooth:
+Dispositivo: **`Car-ESP32`**
+Tipo: Bluetooth Classic SPP
+Formato: texto plano + `\n` por comando
 
-```text
-Car-ESP32
-```
-
-### Fast-path (ejecucion inmediata)
+### Movimiento
 
 | Comando | Accion |
-|---|---|
-| `F` | Adelante |
-| `B` | Atras |
-| `L` | Izquierda |
-| `R` | Derecha |
-| `X` | Explorar |
-| `V` | Vigilar |
-| `P` | Susto |
+|:---:|---|
+| `F` | Adelante (ambos motores) |
+| `B` | Atras (ambos motores) |
+| `L` | Giro izquierda sobre el eje |
+| `R` | Giro derecha sobre el eje |
+| `S` | Stop |
+| `G` | Giro izquierda ~90° y stop |
+| `H` | Giro derecha ~90° y stop |
 
-### Comandos estandar
+### Movimientos especiales
+
+| Comando | Nombre | Descripcion |
+|:---:|---|---|
+| `X` | Explorar | Ruta aleatoria con avances y giros |
+| `D` | Bailar | Coreografia de 12 pasos |
+| `V` | Vigilar | Escaneo 360° con pausas |
+| `P` | Susto | Ojos ON + avance rapido + frenazo dramatico |
+
+> Cualquier comando de movimiento manual (`F/B/L/R/S/G/H`) cancela el movimiento especial activo.
+
+### Servos
 
 | Comando | Accion |
-|---|---|
-| `S` | Detener |
-| `G` | Giro 90 izq aprox |
-| `H` | Giro 90 der aprox |
-| `D` | Bailar |
-| `ON` / `OFF` | LED ojos |
-| `CLEAR` | Limpia texto de `MODE1` |
+|:---:|---|
+| `BRAZOS` | Toggle brazos: reposo ↔ activo (90°) |
+| `CABEZA_IZQ` | Cabeza a 45° (izquierda) |
+| `CABEZA_CEN` | Cabeza a 90° (centro) |
+| `CABEZA_DER` | Cabeza a 135° (derecha) |
 
-### Modos de pantalla
+### LED (ojos)
 
-| Comando | Modo |
-|---|---|
-| `STANDBY` | Modo inicio |
-| `DRIVING` | Modo control |
-| `MODE1` | Texto scroll |
-| `MODE2` | Telemetria |
+| Comando | Accion |
+|:---:|---|
+| `ON` | Enciende LED |
+| `OFF` | Apaga LED |
 
-### Telemetria
-
-| Comando | Ejemplo |
-|---|---|
-| `SET_HORA:<valor>` | `SET_HORA:10:45` |
-| `SET_TIEMPO:<valor>` | `SET_TIEMPO:Nublado 20C` |
-| `SET_NOMBRE:<valor>` | `SET_NOMBRE:Wall-E` |
-
-### Mensajes/saludo
-
-| Comando | Ejemplo |
-|---|---|
-| `SALUDO:<texto>` | `SALUDO:Hola amigos` |
-| `GREETING:<texto>` | `GREETING:Bienvenidos` |
-| `TEXT:<texto>` | `TEXT:Proyecto ESP32` |
-| `MSG:<texto>` | `MSG:Hola` |
-
-### Respuestas del ESP32
+### Respuestas del ESP32 hacia la app
 
 | Respuesta | Significado |
 |---|---|
-| `OK:ON` | LED encendido |
-| `OK:OFF` | LED apagado |
-| `MOVE:EXPLORE` | Inicio explorar |
-| `MOVE:DANCE` | Inicio bailar |
-| `MOVE:SCAN` | Inicio vigilar |
-| `MOVE:PRANK` | Inicio susto |
-| `MOVE:DONE` | Fin/cancelacion movimiento especial |
-| `TTS:<texto>` | Texto listo para sintesis de voz en app |
-
-Mas detalle tecnico en [protocolo.md](protocolo.md).
+| `OK:ON` | LED encendido confirmado |
+| `OK:OFF` | LED apagado confirmado |
+| `MOVE:DANCE` | Inicio secuencia bailar |
+| `MOVE:SCAN` | Inicio secuencia vigilar |
+| `MOVE:PRANK` | Inicio secuencia susto |
+| `MOVE:EXPLORE` | Inicio secuencia explorar |
+| `MOVE:DONE` | Secuencia especial finalizada o cancelada |
 
 ---
 
-## Modos LCD
+## Librerias utilizadas
 
-```mermaid
-stateDiagram-v2
-    [*] --> STANDBY
-    STANDBY --> DRIVING: DRIVING
-    STANDBY --> MODE1: MODE1
-    STANDBY --> MODE2: MODE2
-    DRIVING --> STANDBY: STANDBY
-    MODE1 --> STANDBY: STANDBY
-    MODE2 --> STANDBY: STANDBY
-```
-
-<details>
-<summary><strong>Que muestra cada modo</strong></summary>
-
-- `STANDBY`: mensaje de espera.
-- `DRIVING`: estado de control manual listo.
-- `MODE1`: scrolling de saludo/mensaje en las 4 lineas.
-- `MODE2`: solicita boton y muestra hora/clima/nombre segun GPIO 25/26/27.
-
-</details>
-
----
-
-## Movimientos especiales
-
-| Comando | Nombre | Comportamiento |
-|---|---|---|
-| `X` | Explorar | Ruta aleatoria con segmentos avance+giro |
-| `D` | Bailar | Coreografia de 12 pasos |
-| `V` | Vigilar | Escaneo 360 con pausas |
-| `P` | Susto | Ojos ON + avance rapido + frenazo + dramatica |
-
-Notas:
-
-- Son no bloqueantes (maquina de estados).
-- Un comando manual (`F/B/L/R/S/G/H`) cancela el especial actual.
-- Al finalizar se emite `MOVE:DONE`.
-
----
-
-## Compilar y cargar con PlatformIO
-
-### Requisitos
-
-- VS Code + extension PlatformIO IDE
-- Driver USB del ESP32
-
-### Comandos
-
-```bash
-pio run
-pio run -t upload
-pio device monitor -b 115200
-```
-
-Si tienes multiples puertos:
-
-```bash
-pio run -t upload --upload-port COM5
+```ini
+lib_deps =
+  duinowitchery/hd44780@^1.3.2       ; reservado para LCD (actualmente deshabilitado)
+  madhephaestus/ESP32Servo@^0.13.0   ; control de servomotores
 ```
 
 ---
@@ -270,13 +232,11 @@ pio run -t upload --upload-port COM5
 
 ```text
 Car/
-|- platformio.ini
-|- protocolo.md
-|- src/
-|  |- main.cpp
-|- include/
-|- lib/
-|- test/
+├── platformio.ini
+├── README.md
+├── protocolo.md
+└── src/
+    └── main.cpp
 ```
 
 ---
@@ -284,40 +244,57 @@ Car/
 ## Troubleshooting
 
 <details>
-<summary><strong>No aparece Car-ESP32 por Bluetooth</strong></summary>
+<summary><strong>El motor arranca solo al encender</strong></summary>
 
-- Verifica que el ESP32 este energizado.
-- Revisa monitor serie a 115200 y confirma que setup finalizo.
-- Reinicia Bluetooth del telefono y vuelve a escanear.
+Asegurate de flashear la version mas reciente del firmware. El fix de inicialización fuerza LOW en todos los pines del L298N antes de activar el driver (`digitalWrite` antes de `pinMode`), eliminando el transitorio de boot.
 
 </details>
 
 <details>
-<summary><strong>LCD no muestra nada</strong></summary>
+<summary><strong>No aparece Car-ESP32 por Bluetooth</strong></summary>
 
-- Confirma cableado SDA=21 y SCL=22.
-- Revisa direccion I2C del modulo LCD.
-- Asegura GND comun entre modulo y ESP32.
+- Verifica que el ESP32 este energizado.
+- Abre el monitor serie a 115200 baud y confirma que el setup finalizó correctamente.
+- Reinicia Bluetooth del teléfono y vuelve a escanear.
+
+</details>
+
+<details>
+<summary><strong>Los servos no responden o mueven los motores</strong></summary>
+
+- Confirma que las señales de servo esten en GPIO 25, 26 y 27.
+- No uses GPIO 12, 13 o 14 para servos — son pines de strapping del ESP32 e interfieren con el LEDC.
+- Verifica que los servos tengan 5V externos, no el pin 3.3V del ESP32.
+- Confirma GND comun entre ESP32, L298N y servos.
+
+</details>
+
+<details>
+<summary><strong>El comando BRAZOS activa un motor en lugar del servo</strong></summary>
+
+Esto ocurre si los servos estan en GPIO 12 o 14. Mueve los cables a GPIO 25 y 26 y reflashea.
 
 </details>
 
 <details>
 <summary><strong>Los motores no responden como espero</strong></summary>
 
-- Valida IN1..IN4 en pines 16..19.
-- Verifica alimentacion del puente H y motores.
-- Prueba comandos directos: `F`, `B`, `L`, `R`, `S`.
+- Valida IN1=GPIO16, IN2=GPIO17, IN3=GPIO18, IN4=GPIO19.
+- Verifica alimentacion del L298N (minimo 6V para motores con traccion suficiente).
+- Confirma que ENA y ENB del L298N esten en HIGH (jumper o señal).
+- Prueba comandos directos desde un terminal BT: `F`, `B`, `L`, `R`, `S`.
 
 </details>
 
 ---
 
-## Roadmap sugerido
+## Roadmap
 
-- [ ] Control de velocidad con PWM
+- [ ] Control de velocidad con PWM (ENA/ENB del L298N)
 - [ ] Estado de bateria por telemetria
-- [ ] Modo autonomo con sensores de distancia
+- [ ] Modo autonomo con sensor de distancia ultrasónico
 - [ ] OTA update por Wi-Fi
+- [ ] Reactivar LCD I2C 20x4 y botones fisicos
 
 ---
 
